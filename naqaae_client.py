@@ -8,6 +8,11 @@ import os
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 SPACE_ID  = "hazemgalal1/naqaae-demo"
 
+def _make_client():
+    from gradio_client import Client
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else None
+    return Client(SPACE_ID, headers=headers)
+
 
 def analyze_with_naqaae(text: str) -> dict:
     if not text or not text.strip():
@@ -19,9 +24,8 @@ def analyze_with_naqaae(text: str) -> dict:
         text = " ".join(words[:1500])
 
     try:
-        from gradio_client import Client
-        client = Client(SPACE_ID, hf_token=HF_TOKEN or None)
-        result = client.predict(text, api_name="/predict")
+        client = _make_client()
+        result = client.predict(text, api_name="/full_analyze")
 
         if isinstance(result, (list, tuple)) and len(result) >= 3:
             status = str(result[0])
@@ -48,8 +52,7 @@ def analyze_with_naqaae(text: str) -> dict:
 
 def check_space_status() -> bool:
     try:
-        from gradio_client import Client
-        Client(SPACE_ID, hf_token=HF_TOKEN or None)
+        _make_client()
         return True
     except Exception:
         return False
