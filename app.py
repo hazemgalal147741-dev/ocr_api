@@ -376,7 +376,7 @@ if uploaded:
             st.markdown("")
             with st.expander("✏️ تعديل يدوي قبل التحميل"):
                 edited = st.text_area(
-                    "", value=final, height=220, label_visibility="collapsed",
+                    "تعديل النص", value=final, height=220, label_visibility="collapsed",
                     key="manual_edit"
                 )
                 if st.button("💾 حفظ التعديل"):
