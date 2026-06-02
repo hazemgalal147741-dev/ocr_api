@@ -145,3 +145,98 @@ def analyze(body: AnalyzeRequest):
         naqaae_score=n_score,
         final_report=final_report,
     )
+
+
+# ─── Endpoint 3: Process (OCR + Analyze في خطوة واحدة) ──────────────────────
+
+class ProcessResponse(BaseModel):
+    # OCR
+    text: str
+    language: str
+    # NAQAAE + Groq
+    naqaae_status: str
+    naqaae_score: float
+    final_report: str
+    error: Optional[str] = None
+
+
+@app.post("/process", response_model=ProcessResponse)
+async def process(
+    file: UploadFile = File(...),
+    language: Optional[str] = Query(None, description="ara | eng | ara+eng"),
+    model: Optional[str] = Query("llama-3.3-70b-versatile"),
+):
+    """
+    ارفع ملف → OCR → تصحيح Groq → NAQAAE → تقرير رفع الـ score
+    كل حاجة في خطوة واحدة
+    """
+    ext     = file.filename.split(".")[-1].lower()
+    content = await file.read()
+
+    # ── OCR ──────────────────────────────────────────────────────────────────
+    try:
+        if ext in ("png", "jpg", "jpeg", "bmp", "tiff", "webp"):
+            text, lang = processor.extract_from_pil(Image.open(io.BytesIO(content)), language)
+        elif ext == "pdf":
+            text, lang = processor.extract_from_pdf(content, language)
+        elif ext == "docx":
+            text, lang = processor.extract_from_docx(content)
+        elif ext == "txt":
+            text = content.decode("utf-8", errors="ignore")
+            from ocr_processor import detect_language_from_text
+            lang = language or detect_language_from_text(text)
+        else:
+            raise HTTPException(400, f"نوع الملف غير مدعوم: {ext}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"OCR error: {e}")
+
+    # ── Groq (1): تصحيح إملائي ───────────────────────────────────────────────
+    groq_ok, _ = check_ollama_status()
+    corrected  = text
+    if groq_ok:
+        result    = correct_text_with_ollama(text, model_name=model)
+        corrected = result if result else text
+
+    # ── Groq (2) pre-analysis ─────────────────────────────────────────────────
+    pre_raw = pre_analyze_text(corrected, model=model)
+    pre_str = ""
+    if pre_raw:
+        try:
+            clean   = pre_raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            pre_str = json.dumps(json.loads(clean), ensure_ascii=False)
+        except Exception:
+            pre_str = pre_raw
+
+    # ── NAQAAE ────────────────────────────────────────────────────────────────
+    naqaae   = analyze_with_naqaae(corrected)
+    n_error  = naqaae.get("error")
+    n_status = naqaae.get("status") or "غير معروف"
+    n_score  = float(naqaae.get("score") or 0.0)
+    n_recs   = naqaae.get("recs") or ""
+
+    if n_error:
+        return ProcessResponse(
+            text=corrected, language=lang,
+            naqaae_status=n_status, naqaae_score=n_score,
+            final_report="", error=n_error,
+        )
+
+    # ── Groq (2): تقرير رفع الـ score ────────────────────────────────────────
+    final_report = synthesize_report(
+        text=corrected,
+        pre_analysis=pre_str,
+        naqaae_status=n_status,
+        naqaae_score=n_score,
+        naqaae_recs=n_recs,
+        model=model,
+    ) or ""
+
+    return ProcessResponse(
+        text=corrected,
+        language=lang,
+        naqaae_status=n_status,
+        naqaae_score=n_score,
+        final_report=final_report,
+    )
