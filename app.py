@@ -76,6 +76,10 @@ async def ocr(
             text, lang = processor.extract_from_pdf(content, language)
         elif ext == "docx":
             text, lang = processor.extract_from_docx(content)
+        elif ext == "txt":
+            text = content.decode("utf-8", errors="ignore")
+            from ocr_processor import detect_language_from_text
+            lang = language or detect_language_from_text(text)
         else:
             raise HTTPException(400, f"نوع الملف غير مدعوم: {ext}")
     except HTTPException:

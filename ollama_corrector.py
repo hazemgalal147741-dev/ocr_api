@@ -1,6 +1,6 @@
 """
-Groq Integration for Arabic Text Correction
-يدعم Groq Cloud API عبر متغير البيئة GROQ_API_KEY
+Groq Integration
+مرحلتين: تصحيح إملائي + تقرير رفع الـ score
 """
 
 import os
@@ -75,7 +75,6 @@ def check_ollama_status() -> Tuple[bool, List[str]]:
 
 
 def _call_groq(messages: list, model: str, temperature: float = 0.1) -> Optional[str]:
-    """helper عام لاستدعاء Groq"""
     try:
         data = {
             "model": model,
@@ -91,105 +90,26 @@ def _call_groq(messages: list, model: str, temperature: float = 0.1) -> Optional
         return None
 
 
-def pre_analyze_text(text: str, model: str = DEFAULT_MODEL) -> Optional[str]:
-    """
-    المرحلة الأولى: Groq يحلل النص العربي ويستخرج:
-    - ملخص الوثيقة
-    - نقاط القوة
-    - نقاط الضعف المحتملة
-    ويرجع تحليله كـ JSON string
-    """
-    if is_visual_arabic(text):
-        text = fix_visual_arabic(text)
-
-    system = """أنت خبير في تقييم جودة الوثائق والتقارير المؤسسية العربية.
-مهمتك: تحليل النص وتقديم تقرير أولي منظم بصيغة JSON فقط.
-
-أعد JSON بهذا الشكل بالضبط (بدون أي نص خارج الـ JSON):
-{
-  "document_summary": "ملخص الوثيقة في جملتين",
-  "document_type": "نوع الوثيقة (تقرير / خطة / سياسة / إجراء / أخرى)",
-  "strengths": ["نقطة قوة 1", "نقطة قوة 2"],
-  "weaknesses": ["نقطة ضعف 1", "نقطة ضعف 2"],
-  "completeness_estimate": 75
-}"""
-
-    words = text.split()
-    if len(words) > 1000:
-        text = " ".join(words[:1000])
-
-    result = _call_groq(
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": f"حلل هذه الوثيقة:\n\n{text}"},
-        ],
-        model=model,
-        temperature=0.2,
-    )
-    return result
-
-
-def synthesize_report(
-    text: str,
-    pre_analysis: str,
-    naqaae_status: str,
-    naqaae_score: float,
-    naqaae_recs: str,
-    model: str = DEFAULT_MODEL,
-) -> Optional[str]:
-    """
-    المرحلة الثانية: Groq يلخص كل حاجة ويطلع تقرير نهائي منظم
-    بيجمع: تحليله الأولي + نتيجة NAQAAE + التوصيات الخام
-    """
-    system = """أنت خبير اعتماد مؤسسي. بناءً على التحليل الأولي ونتيجة نظام NAQAAE،
-اكتب تقريراً نهائياً واضحاً ومنظماً باللغة العربية.
-
-التقرير يجب أن يحتوي على:
-1. ملخص تنفيذي (جملتان)
-2. نتيجة الاعتماد: معتمد ✅ أو غير معتمد ❌ مع الدرجة
-3. أبرز نقاط القوة (3 نقاط كحد أقصى)
-4. توصيات التحسين المحددة والقابلة للتنفيذ (مرتبة حسب الأولوية)
-5. الخلاصة
-
-اكتب بأسلوب مهني واضح. لا تذكر أسماء الأنظمة أو التقنيات المستخدمة."""
-
-    user_content = f"""التحليل الأولي للوثيقة:
-{pre_analysis}
-
-نتيجة تقييم الجودة:
-- الحالة: {naqaae_status}
-- الدرجة: {naqaae_score:.1f} / 100
-- ملاحظات النظام: {naqaae_recs or 'لا توجد'}
-
-النص الأصلي (أول 500 كلمة):
-{' '.join(text.split()[:500])}
-
-اكتب التقرير النهائي:"""
-
-    return _call_groq(
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user_content},
-        ],
-        model=model,
-        temperature=0.3,
-    )
-
+# ─── المرحلة الأولى: تصحيح إملائي ───────────────────────────────────────────
 
 def send_to_ollama(text: str, model_name: str) -> Optional[str]:
-    """تصحيح إملائي فقط — محتفظ بالدالة للتوافق"""
+    """Groq (1): تصحيح الأخطاء الإملائية فقط"""
     if is_visual_arabic(text):
         text = fix_visual_arabic(text)
 
-    system = """أنت مساعد متخصص في تصحيح الأخطاء الإملائية في النصوص العربية.
-- صحح الأخطاء الإملائية فقط
-- لا تغير المعنى أو التنسيق
-- أعد النص المصحح فقط بدون تعليقات"""
+    system = """أنت مدقق لغوي متخصص في النصوص العربية المؤسسية.
+مهمتك الوحيدة: تصحيح الأخطاء الإملائية والنحوية فقط.
+
+قواعد صارمة:
+- لا تغير المعنى أو المحتوى أو التنسيق
+- لا تحذف أي جزء من النص
+- لا تضف تعليقات أو شروحات
+- أعد النص المصحح فقط"""
 
     result = _call_groq(
         messages=[
             {"role": "system", "content": system},
-            {"role": "user",   "content": f"صحح النص:\n\n{text}"},
+            {"role": "user",   "content": f"صحح الأخطاء الإملائية في النص التالي:\n\n{text}"},
         ],
         model=model_name,
         temperature=0.1,
@@ -228,3 +148,107 @@ def correct_text_with_ollama(text: str, model_name: str = DEFAULT_MODEL,
         result = send_to_ollama(part, model_name)
         corrected_parts.append(result if result else part)
     return '\n'.join(corrected_parts)
+
+
+# ─── المرحلة الثانية: تقرير رفع الـ score ────────────────────────────────────
+
+def synthesize_report(
+    text: str,
+    pre_analysis: str,
+    naqaae_status: str,
+    naqaae_score: float,
+    naqaae_recs: str,
+    model: str = DEFAULT_MODEL,
+) -> Optional[str]:
+    """
+    Groq (2): بعد ما NAQAAE دي الـ score
+    يحلل ليه الـ score كده وإزاي نرفعه بخطوات محددة
+    """
+
+    # تحديد مستوى الـ score
+    if naqaae_score >= 70:
+        score_level = "جيد — الوثيقة قريبة من الاعتماد"
+        target      = "رفعه فوق 85 للحصول على اعتماد ممتاز"
+    elif naqaae_score >= 50:
+        score_level = "متوسط — يحتاج تحسينات جوهرية"
+        target      = "رفعه فوق 70 للحصول على الاعتماد"
+    else:
+        score_level = "منخفض — الوثيقة تحتاج إعادة هيكلة"
+        target      = "رفعه فوق 60 كحد أدنى للاعتماد"
+
+    system = """أنت خبير اعتماد مؤسسي متخصص في معايير NAQAAE.
+مهمتك: تحليل نتيجة تقييم الوثيقة وتقديم خطة عملية لرفع الدرجة.
+
+اكتب تقريرك بهذا الهيكل بالضبط:
+
+## 📊 ملخص النتيجة
+[جملة أو جملتان عن الوضع الحالي]
+
+## ❓ لماذا الدرجة [X]/100؟
+[3-4 أسباب محددة تفسر الدرجة الحالية بناءً على محتوى الوثيقة]
+
+## 🚀 خطة رفع الدرجة إلى [target]
+### أولاً: إضافات فورية (ترفع الدرجة 10-15 نقطة)
+- [إجراء محدد وقابل للتنفيذ]
+- [إجراء محدد وقابل للتنفيذ]
+- [إجراء محدد وقابل للتنفيذ]
+
+### ثانياً: تحسينات هيكلية (ترفع الدرجة 15-20 نقطة)
+- [إجراء محدد وقابل للتنفيذ]
+- [إجراء محدد وقابل للتنفيذ]
+
+### ثالثاً: تحسينات المحتوى (ترفع الدرجة 10-15 نقطة)
+- [إجراء محدد وقابل للتنفيذ]
+- [إجراء محدد وقابل للتنفيذ]
+
+## ✅ الخلاصة
+[جملة تحفيزية وتقدير الدرجة المتوقعة بعد التحسينات]
+
+اكتب بأسلوب مهني ومحدد. كل توصية لازم تكون قابلة للتنفيذ مباشرة."""
+
+    user_content = f"""معلومات الوثيقة:
+- الدرجة الحالية: {naqaae_score:.1f} / 100
+- مستوى الدرجة: {score_level}
+- الهدف: {target}
+- حالة الاعتماد: {naqaae_status}
+- ملاحظات نظام التقييم: {naqaae_recs or 'لا توجد'}
+
+محتوى الوثيقة (أول 800 كلمة):
+{' '.join(text.split()[:800])}
+
+اكتب التقرير والخطة:"""
+
+    return _call_groq(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user_content},
+        ],
+        model=model,
+        temperature=0.3,
+    )
+
+
+# ─── pre_analyze (محتفظ بيه للتوافق) ────────────────────────────────────────
+
+def pre_analyze_text(text: str, model: str = DEFAULT_MODEL) -> Optional[str]:
+    """تحليل أولي سريع للوثيقة"""
+    system = """أنت خبير وثائق مؤسسية. حلل النص وأعد JSON فقط بهذا الشكل:
+{
+  "document_type": "نوع الوثيقة",
+  "strengths": ["نقطة قوة 1", "نقطة قوة 2"],
+  "weaknesses": ["نقطة ضعف 1", "نقطة ضعف 2"]
+}
+بدون أي نص خارج الـ JSON."""
+
+    words = text.split()
+    if len(words) > 800:
+        text = " ".join(words[:800])
+
+    return _call_groq(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": f"حلل:\n\n{text}"},
+        ],
+        model=model,
+        temperature=0.2,
+    )
