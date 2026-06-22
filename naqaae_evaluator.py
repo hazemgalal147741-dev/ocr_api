@@ -81,7 +81,11 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 للهيئة القومية لضمان جودة التعليم والاعتماد (NAQAAE) في مصر — دليل اعتماد
 كليات ومعاهد التعليم العالي (إصدار 2015 المعدل)، وهو يتضمن 12 معيار رسمي.
 
-مهمتك: تقييم الوثيقة المؤسسية على المعايير الـ 12 وإعطاء درجة لكل معيار.
+مهمتك أولاً: تحديد هل النص المُقدم له علاقة من الأساس بوثائق مؤسسية / تعليمية /
+اعتماد جودة (مثل: خطط استراتيجية، تقارير، لوائح، مرفقات اعتماد، إلخ)، أم نص
+عشوائي لا علاقة له بالموضوع (مثل: محادثة عادية، نص أدبي، كود برمجي، إلخ).
+
+ثانياً: قيّم الوثيقة على المعايير الـ 12 وإعطاء درجة لكل معيار.
 
 قواعد التقييم:
 - قيّم فقط ما هو موجود فعلاً في النص
@@ -89,18 +93,21 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 - لو المعيار مذكور بشكل سطحي → 30-60
 - لو المعيار مفصّل مع أدلة → 60-85
 - لو المعيار شامل ومتكامل → 85-100
+- لو النص بالكامل لا علاقة له بالموضوع المؤسسي/التعليمي من الأساس،
+  ضع is_relevant=false وأعط كل المعايير درجة منخفضة جداً (0-10)
 - ملحوظة: معيار "الدراسات العليا" قد لا ينطبق على كل المؤسسات (كليات بدون
   برامج دراسات عليا)؛ في هذه الحالة قيّمه بدرجة متوسطة (50) واذكر ذلك في recs
   بدلاً من تصفيره بالكامل
 
 أعد JSON فقط بهذا الشكل بالضبط، بدون أي نص خارجه:
 {
+  "is_relevant": <true أو false>,
   "domain_scores": {
 """ + domains_str + """
   },
   "overall_score": <متوسط المعايير الـ 12>,
-  "strengths": "<أهم نقطتين إيجابيتين في جملة واحدة>",
-  "weaknesses": "<أهم نقطتين سلبيتين في جملة واحدة>"
+  "strengths": "<أهم نقطتين إيجابيتين في جملة واحدة، أو فارغة لو النص غير متعلق>",
+  "weaknesses": "<أهم نقطتين سلبيتين في جملة واحدة، أو وصف لكون النص غير متعلق بمعايير الاعتماد لو is_relevant=false>"
 }"""
 
     user_content = f"قيّم الوثيقة التالية وفق المعايير الـ 12 الرسمية لـ NAQAAE:\n\n{text}"
@@ -115,7 +122,8 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 
     if not raw:
         return {"status": "غير معروف", "score": 0.0, "recs": "",
-                "error": "⚠️ فشل الاتصال بـ Groq", "domain_scores": {}}
+                "error": "⚠️ تعذر إكمال التحليل حاليًا، برجاء المحاولة مرة أخرى بعد قليل",
+                "domain_scores": {}}
 
     # Parse JSON
     try:
@@ -132,6 +140,7 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 
     # استخراج النتايج
     domain_scores = data.get("domain_scores", {})
+    is_relevant   = data.get("is_relevant", True)
 
     # حساب الـ overall score
     raw_score = data.get("overall_score")
@@ -146,7 +155,9 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
     score = round(max(0.0, min(score, 100.0)), 1)
 
     # تحديد الـ status
-    if score >= 70:
+    if not is_relevant:
+        status = "غير قابل للتقييم"
+    elif score >= 70:
         status = "معتمد"
     elif score >= 50:
         status = "مؤجل"
@@ -156,7 +167,12 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
     # التوصيات
     strengths  = data.get("strengths", "")
     weaknesses = data.get("weaknesses", "")
-    recs = f"نقاط القوة: {strengths}\nنقاط الضعف: {weaknesses}" if strengths or weaknesses else ""
+    if not is_relevant:
+        recs = (weaknesses or
+                "المحتوى المُقدم لا يتعلق بمعايير الاعتماد المؤسسي، "
+                "برجاء رفع وثيقة مؤسسية (خطة استراتيجية، تقرير، لائحة، أو مرفقات اعتماد).")
+    else:
+        recs = f"نقاط القوة: {strengths}\nنقاط الضعف: {weaknesses}" if strengths or weaknesses else ""
 
     return {
         "status":       status,
@@ -164,6 +180,7 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
         "recs":         recs,
         "error":        None,
         "domain_scores": domain_scores,
+        "is_relevant":  is_relevant,
     }
 
 
