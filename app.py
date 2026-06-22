@@ -45,6 +45,7 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     naqaae_status: str
     naqaae_score: float
+    domain_scores: dict = {}
     final_report: str
     error: Optional[str] = None
 
@@ -98,6 +99,7 @@ def analyze(body: AnalyzeRequest):
     ابعت النص → يرجع:
     - naqaae_status : معتمد / غير معتمد
     - naqaae_score  : الدرجة من 100
+    - domain_scores : درجات كل محور
     - final_report  : تقرير Groq النهائي بالتوصيات
     """
     if not body.text.strip():
@@ -116,16 +118,18 @@ def analyze(body: AnalyzeRequest):
             pre_str = pre_raw
 
     # 2. NAQAAE: تصنيف
-    naqaae   = analyze_with_naqaae(body.text)
-    n_error  = naqaae.get("error")
-    n_status = naqaae.get("status") or "غير معروف"
-    n_score  = float(naqaae.get("score") or 0.0)
-    n_recs   = naqaae.get("recs") or ""
+    naqaae          = analyze_with_naqaae(body.text)
+    n_error         = naqaae.get("error")
+    n_status        = naqaae.get("status") or "غير معروف"
+    n_score         = float(naqaae.get("score") or 0.0)
+    n_recs          = naqaae.get("recs") or ""
+    n_domain_scores = naqaae.get("domain_scores", {})
 
     if n_error:
         return AnalyzeResponse(
             naqaae_status=n_status,
             naqaae_score=n_score,
+            domain_scores=n_domain_scores,
             final_report="",
             error=n_error,
         )
@@ -143,6 +147,7 @@ def analyze(body: AnalyzeRequest):
     return AnalyzeResponse(
         naqaae_status=n_status,
         naqaae_score=n_score,
+        domain_scores=n_domain_scores,
         final_report=final_report,
     )
 
@@ -156,6 +161,7 @@ class ProcessResponse(BaseModel):
     # NAQAAE + Groq
     naqaae_status: str
     naqaae_score: float
+    domain_scores: dict = {}
     final_report: str
     error: Optional[str] = None
 
@@ -210,16 +216,18 @@ async def process(
             pre_str = pre_raw
 
     # ── NAQAAE ────────────────────────────────────────────────────────────────
-    naqaae   = analyze_with_naqaae(corrected)
-    n_error  = naqaae.get("error")
-    n_status = naqaae.get("status") or "غير معروف"
-    n_score  = float(naqaae.get("score") or 0.0)
-    n_recs   = naqaae.get("recs") or ""
+    naqaae          = analyze_with_naqaae(corrected)
+    n_error         = naqaae.get("error")
+    n_status        = naqaae.get("status") or "غير معروف"
+    n_score         = float(naqaae.get("score") or 0.0)
+    n_recs          = naqaae.get("recs") or ""
+    n_domain_scores = naqaae.get("domain_scores", {})
 
     if n_error:
         return ProcessResponse(
             text=corrected, language=lang,
             naqaae_status=n_status, naqaae_score=n_score,
+            domain_scores=n_domain_scores,
             final_report="", error=n_error,
         )
 
@@ -238,5 +246,6 @@ async def process(
         language=lang,
         naqaae_status=n_status,
         naqaae_score=n_score,
+        domain_scores=n_domain_scores,
         final_report=final_report,
     )
