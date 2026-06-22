@@ -18,7 +18,7 @@ from ollama_corrector import (
     pre_analyze_text,
     synthesize_report,
 )
-from naqaae_client import analyze_with_naqaae
+from naqaae_evaluator import analyze_with_naqaae
 
 app = FastAPI(title="Arabic OCR + NAQAAE API", version="2.0.0")
 
