@@ -141,6 +141,7 @@ def analyze(body: AnalyzeRequest):
         naqaae_status=n_status,
         naqaae_score=n_score,
         naqaae_recs=n_recs,
+        domain_scores=n_domain_scores,
         model=model,
     ) or ""
 
@@ -238,6 +239,7 @@ async def process(
         naqaae_status=n_status,
         naqaae_score=n_score,
         naqaae_recs=n_recs,
+        domain_scores=n_domain_scores,
         model=model,
     ) or ""
 
