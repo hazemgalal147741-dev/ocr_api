@@ -124,6 +124,7 @@ def analyze(body: AnalyzeRequest):
     n_score         = float(naqaae.get("score") or 0.0)
     n_recs          = naqaae.get("recs") or ""
     n_domain_scores = naqaae.get("domain_scores", {})
+    n_is_relevant   = naqaae.get("is_relevant", True)
 
     if n_error:
         return AnalyzeResponse(
@@ -132,6 +133,22 @@ def analyze(body: AnalyzeRequest):
             domain_scores=n_domain_scores,
             final_report="",
             error=n_error,
+        )
+
+    # لو النص مالوش علاقة بمعايير الاعتماد من الأساس، رسالة واضحة
+    # بدون استدعاء Groq تاني لعمل تقرير على درجات غير حقيقية
+    if not n_is_relevant:
+        return AnalyzeResponse(
+            naqaae_status=n_status,
+            naqaae_score=n_score,
+            domain_scores=n_domain_scores,
+            final_report=(
+                "## ⚠️ المحتوى غير مناسب للتحليل\n\n"
+                "النص أو الملف المُرفق لا يحتوي على محتوى مؤسسي أو تعليمي "
+                "يمكن تقييمه وفق معايير الاعتماد.\n\n"
+                "برجاء التأكد من رفع وثيقة مؤسسية مناسبة مثل: خطة استراتيجية، "
+                "تقرير سنوي، لائحة داخلية، أو مرفقات اعتماد، وإعادة المحاولة."
+            ),
         )
 
     # 3. Groq: تقرير نهائي
@@ -223,6 +240,7 @@ async def process(
     n_score         = float(naqaae.get("score") or 0.0)
     n_recs          = naqaae.get("recs") or ""
     n_domain_scores = naqaae.get("domain_scores", {})
+    n_is_relevant   = naqaae.get("is_relevant", True)
 
     if n_error:
         return ProcessResponse(
@@ -230,6 +248,24 @@ async def process(
             naqaae_status=n_status, naqaae_score=n_score,
             domain_scores=n_domain_scores,
             final_report="", error=n_error,
+        )
+
+    # لو النص مالوش علاقة بمعايير الاعتماد من الأساس، رسالة واضحة
+    # بدون استدعاء Groq تاني لعمل تقرير على درجات غير حقيقية
+    if not n_is_relevant:
+        return ProcessResponse(
+            text=corrected,
+            language=lang,
+            naqaae_status=n_status,
+            naqaae_score=n_score,
+            domain_scores=n_domain_scores,
+            final_report=(
+                "## ⚠️ المحتوى غير مناسب للتحليل\n\n"
+                "الملف المُرفق لا يحتوي على محتوى مؤسسي أو تعليمي "
+                "يمكن تقييمه وفق معايير الاعتماد.\n\n"
+                "برجاء التأكد من رفع وثيقة مؤسسية مناسبة مثل: خطة استراتيجية، "
+                "تقرير سنوي، لائحة داخلية، أو مرفقات اعتماد، وإعادة المحاولة."
+            ),
         )
 
     # ── Groq (2): تقرير رفع الـ score ────────────────────────────────────────
