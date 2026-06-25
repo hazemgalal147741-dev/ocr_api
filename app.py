@@ -18,7 +18,7 @@ from ollama_corrector import (
     pre_analyze_text,
     synthesize_report,
 )
-from naqaae_evaluator import analyze_with_naqaae
+from naqaae_evaluator import analyze_with_naqaae, extract_document_meta
 
 app = FastAPI(title="Arabic OCR + NAQAAE API", version="2.0.0")
 
@@ -43,6 +43,8 @@ class AnalyzeRequest(BaseModel):
     model: Optional[str] = "llama-3.3-70b-versatile"
 
 class AnalyzeResponse(BaseModel):
+    document_id: Optional[str] = None
+    document_date: Optional[str] = None
     naqaae_status: str
     naqaae_score: float
     domain_scores: dict = {}
@@ -107,6 +109,28 @@ def analyze(body: AnalyzeRequest):
 
     model = body.model or "llama-3.3-70b-versatile"
 
+    # 0. استخراج رقم/كود الوثيقة وتاريخها — ولو الوثيقة قديمة (قبل 2025) نرفضها
+    #    فوراً بدون أي استدعاءات Groq زيادة (تحليل أولي / NAQAAE / تقرير)
+    meta       = extract_document_meta(body.text, model=model)
+    doc_id     = meta.get("document_id")
+    doc_date   = meta.get("document_date")
+    doc_year   = meta.get("document_year")
+
+    if doc_year is not None and doc_year < 2025:
+        return AnalyzeResponse(
+            document_id=doc_id,
+            document_date=doc_date,
+            naqaae_status="مرفوض - ملف قديم",
+            naqaae_score=0.0,
+            domain_scores={},
+            final_report=(
+                f"## ⚠️ هذا الملف قديم\n\n"
+                f"تاريخ الوثيقة المُكتشف: **{doc_date or doc_year}**\n\n"
+                "لا يمكن قبول وثائق يسبق تاريخها عام 2025 للتحليل والتقييم. "
+                "برجاء رفع نسخة محدثة من الوثيقة بتاريخ 2025 أو أحدث."
+            ),
+        )
+
     # 1. Groq: تحليل أولي
     pre_raw = pre_analyze_text(body.text, model=model)
     pre_str = ""
@@ -128,6 +152,8 @@ def analyze(body: AnalyzeRequest):
 
     if n_error:
         return AnalyzeResponse(
+            document_id=doc_id,
+            document_date=doc_date,
             naqaae_status=n_status,
             naqaae_score=n_score,
             domain_scores=n_domain_scores,
@@ -139,6 +165,8 @@ def analyze(body: AnalyzeRequest):
     # بدون استدعاء Groq تاني لعمل تقرير على درجات غير حقيقية
     if not n_is_relevant:
         return AnalyzeResponse(
+            document_id=doc_id,
+            document_date=doc_date,
             naqaae_status=n_status,
             naqaae_score=n_score,
             domain_scores=n_domain_scores,
@@ -163,6 +191,8 @@ def analyze(body: AnalyzeRequest):
     ) or ""
 
     return AnalyzeResponse(
+        document_id=doc_id,
+        document_date=doc_date,
         naqaae_status=n_status,
         naqaae_score=n_score,
         domain_scores=n_domain_scores,
@@ -176,6 +206,9 @@ class ProcessResponse(BaseModel):
     # OCR
     text: str
     language: str
+    # Document Meta
+    document_id: Optional[str] = None
+    document_date: Optional[str] = None
     # NAQAAE + Groq
     naqaae_status: str
     naqaae_score: float
@@ -223,6 +256,30 @@ async def process(
         result    = correct_text_with_ollama(text, model_name=model)
         corrected = result if result else text
 
+    # ── استخراج رقم/كود الوثيقة وتاريخها — ولو الوثيقة قديمة (قبل 2025)
+    #    نرفضها فوراً بدون أي استدعاءات Groq زيادة ───────────────────────────
+    meta     = extract_document_meta(corrected, model=model)
+    doc_id   = meta.get("document_id")
+    doc_date = meta.get("document_date")
+    doc_year = meta.get("document_year")
+
+    if doc_year is not None and doc_year < 2025:
+        return ProcessResponse(
+            text=corrected,
+            language=lang,
+            document_id=doc_id,
+            document_date=doc_date,
+            naqaae_status="مرفوض - ملف قديم",
+            naqaae_score=0.0,
+            domain_scores={},
+            final_report=(
+                f"## ⚠️ هذا الملف قديم\n\n"
+                f"تاريخ الوثيقة المُكتشف: **{doc_date or doc_year}**\n\n"
+                "لا يمكن قبول وثائق يسبق تاريخها عام 2025 للتحليل والتقييم. "
+                "برجاء رفع نسخة محدثة من الوثيقة بتاريخ 2025 أو أحدث."
+            ),
+        )
+
     # ── Groq (2) pre-analysis ─────────────────────────────────────────────────
     pre_raw = pre_analyze_text(corrected, model=model)
     pre_str = ""
@@ -245,6 +302,7 @@ async def process(
     if n_error:
         return ProcessResponse(
             text=corrected, language=lang,
+            document_id=doc_id, document_date=doc_date,
             naqaae_status=n_status, naqaae_score=n_score,
             domain_scores=n_domain_scores,
             final_report="", error=n_error,
@@ -256,6 +314,8 @@ async def process(
         return ProcessResponse(
             text=corrected,
             language=lang,
+            document_id=doc_id,
+            document_date=doc_date,
             naqaae_status=n_status,
             naqaae_score=n_score,
             domain_scores=n_domain_scores,
@@ -268,7 +328,7 @@ async def process(
             ),
         )
 
-    # ── Groq (2): تقرير رفع الـ score ────────────────────────────────────────
+    # ── Groq (3): تقرير رفع الـ score ────────────────────────────────────────
     final_report = synthesize_report(
         text=corrected,
         pre_analysis=pre_str,
@@ -282,6 +342,8 @@ async def process(
     return ProcessResponse(
         text=corrected,
         language=lang,
+        document_id=doc_id,
+        document_date=doc_date,
         naqaae_status=n_status,
         naqaae_score=n_score,
         domain_scores=n_domain_scores,

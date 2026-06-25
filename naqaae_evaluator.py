@@ -218,3 +218,78 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 def check_space_status() -> bool:
     """للتوافق مع الكود القديم"""
     return bool(GROQ_API_KEY)
+
+
+def extract_document_meta(text: str, model: str = DEFAULT_MODEL) -> dict:
+    """
+    يستخرج رقم/كود الوثيقة (لو موجود) وأحدث تاريخ مذكور فيها.
+    بيرجع: {"document_id": str|None, "document_date": str|None (YYYY-MM-DD), "document_year": int|None}
+    """
+    empty = {"document_id": None, "document_date": None, "document_year": None}
+
+    if not text or not text.strip():
+        return empty
+
+    words = text.split()
+    sample = " ".join(words[:600])  # أول 600 كلمة كفاية لمعرفة الميتاداتا
+
+    system = """أنت مساعد متخصص في استخراج البيانات الوصفية من الوثائق المؤسسية العربية.
+مهمتك: استخراج رقم/كود الوثيقة (لو موجود) وأحدث تاريخ مذكور في النص (تاريخ إصدار،
+تاريخ اعتماد، تاريخ تقرير، أو أي تاريخ واضح يخص الوثيقة نفسها — وليس تواريخ عشوائية
+مذكورة كأمثلة داخل النص).
+
+قواعد:
+- لو مفيش رقم/كود وثيقة واضح، اجعل document_id = null
+- لو مفيش تاريخ واضح، اجعل document_date = null و document_year = null
+- حوّل أي تاريخ هجري لاحظ أنه هجري ولا تحوله، فقط استخرج السنة الميلادية لو مذكورة صريح،
+  وإن لم تكن متأكداً من التحويل اجعل document_year = null
+- التاريخ المطلوب بصيغة ISO: YYYY-MM-DD (أو YYYY-MM أو YYYY لو الشهر/اليوم غير معروفين)
+
+أعد JSON فقط بهذا الشكل بالضبط، بدون أي نص خارجه:
+{
+  "document_id": "<رقم/كود الوثيقة أو null>",
+  "document_date": "<أحدث تاريخ بصيغة YYYY-MM-DD أو YYYY-MM أو YYYY، أو null>",
+  "document_year": <السنة كرقم فقط، أو null>
+}"""
+
+    raw = _call_groq(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": f"استخرج البيانات من النص التالي:\n\n{sample}"},
+        ],
+        model=model,
+    )
+
+    if not raw:
+        return empty
+
+    try:
+        clean = raw.strip()
+        if "```" in clean:
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        data = json.loads(clean.strip())
+    except Exception:
+        return empty
+
+    doc_id   = data.get("document_id") or None
+    doc_date = data.get("document_date") or None
+    doc_year = data.get("document_year")
+
+    try:
+        doc_year = int(doc_year) if doc_year is not None else None
+    except (ValueError, TypeError):
+        doc_year = None
+
+    # fallback: لو السنة مش متوفرة بس التاريخ متوفر، نستخرجها من أول 4 أرقام فيه
+    if doc_year is None and doc_date:
+        match = re.match(r"^(\d{4})", doc_date.strip())
+        if match:
+            doc_year = int(match.group(1))
+
+    return {
+        "document_id":   doc_id,
+        "document_date": doc_date,
+        "document_year": doc_year,
+    }
