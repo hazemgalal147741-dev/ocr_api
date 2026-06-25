@@ -6,6 +6,8 @@ naqaae_evaluator.py
 
 import os
 import json
+import re
+import time
 import requests
 from typing import Optional
 
@@ -38,26 +40,55 @@ def _headers() -> dict:
     }
 
 
-def _call_groq(messages: list, model: str = DEFAULT_MODEL) -> Optional[str]:
+def _parse_retry_wait(resp) -> float:
+    """يحاول يستخرج مدة الانتظار المطلوبة من رسالة الـ rate limit"""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
     try:
-        resp = requests.post(
-            GROQ_API_URL,
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": 0.1,
-                "max_tokens": 2048,
-            },
-            headers=_headers(),
-            timeout=120,
-        )
-        if resp.status_code != 200:
-            print(f"[Groq/NAQAAE] HTTP {resp.status_code}: {resp.text[:500]}")
+        match = re.search(r"try again in ([\d.]+)s", resp.text)
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return 5.0
+
+
+def _call_groq(messages: list, model: str = DEFAULT_MODEL, max_retries: int = 3) -> Optional[str]:
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                GROQ_API_URL,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                },
+                headers=_headers(),
+                timeout=120,
+            )
+
+            if resp.status_code == 429:
+                wait = min(_parse_retry_wait(resp) + 0.5, 30)
+                print(f"[Groq/NAQAAE] Rate limited (attempt {attempt + 1}/{max_retries + 1}), waiting {wait}s")
+                if attempt < max_retries:
+                    time.sleep(wait)
+                    continue
+                return None
+
+            if resp.status_code != 200:
+                print(f"[Groq/NAQAAE] HTTP {resp.status_code}: {resp.text[:500]}")
+                return None
+
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[Groq/NAQAAE] Exception: {e}")
             return None
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[Groq/NAQAAE] Exception: {e}")
-        return None
+    return None
 
 
 def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:

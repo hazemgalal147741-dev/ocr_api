@@ -6,6 +6,7 @@ Groq Integration
 import os
 import requests
 import re
+import time
 import unicodedata
 from typing import Optional, Tuple, List
 
@@ -74,22 +75,52 @@ def check_ollama_status() -> Tuple[bool, List[str]]:
         return False, []
 
 
-def _call_groq(messages: list, model: str, temperature: float = 0.1) -> Optional[str]:
+def _parse_retry_wait(resp) -> float:
+    """يحاول يستخرج مدة الانتظار المطلوبة من رسالة الـ rate limit"""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
     try:
-        data = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": 4096,
-        }
-        resp = requests.post(GROQ_API_URL, json=data, headers=_headers(), timeout=120)
-        if resp.status_code != 200:
-            print(f"[Groq] HTTP {resp.status_code}: {resp.text[:500]}")
+        match = re.search(r"try again in ([\d.]+)s", resp.text)
+        if match:
+            return float(match.group(1))
+    except Exception:
+        pass
+    return 5.0
+
+
+def _call_groq(messages: list, model: str, temperature: float = 0.1,
+                max_retries: int = 3) -> Optional[str]:
+    for attempt in range(max_retries + 1):
+        try:
+            data = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": 4096,
+            }
+            resp = requests.post(GROQ_API_URL, json=data, headers=_headers(), timeout=120)
+
+            if resp.status_code == 429:
+                wait = min(_parse_retry_wait(resp) + 0.5, 30)
+                print(f"[Groq] Rate limited (attempt {attempt + 1}/{max_retries + 1}), waiting {wait}s")
+                if attempt < max_retries:
+                    time.sleep(wait)
+                    continue
+                return None
+
+            if resp.status_code != 200:
+                print(f"[Groq] HTTP {resp.status_code}: {resp.text[:500]}")
+                return None
+
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[Groq] Exception: {e}")
             return None
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[Groq] Exception: {e}")
-        return None
+    return None
 
 
 # ─── المرحلة الأولى: تصحيح إملائي ───────────────────────────────────────────
