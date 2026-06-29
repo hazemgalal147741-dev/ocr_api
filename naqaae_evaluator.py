@@ -2,6 +2,15 @@
 naqaae_evaluator.py
 بيحل محل naqaae_client.py
 بيقيّم الوثيقة على 12 معيار NAQAAE الرسمية عن طريق Groq
+
+Prompt Engineering Techniques Applied:
+  1. Role Prompting
+  2. Scoring Rubric (explicit criteria)
+  3. Chain of Thought (step-by-step reasoning before scoring)
+  4. Few-Shot Examples (good doc vs bad doc)
+  5. Structured Output (strict JSON schema)
+  6. Negative Instructions (irrelevant content, edge cases)
+  7. Output Constraints (no text outside JSON)
 """
 
 import os
@@ -15,8 +24,6 @@ GROQ_API_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-# المعايير الرسمية الـ 12 لاعتماد المؤسسات (دليل اعتماد كليات ومعاهد التعليم العالي،
-# الهيئة القومية لضمان جودة التعليم والاعتماد NAQAAE، إصدار 2015 المعدل)
 DOMAINS = [
     "التخطيط الاستراتيجي",
     "القيادة والحوكمة",
@@ -32,6 +39,135 @@ DOMAINS = [
     "المشاركة المجتمعية وتنمية البيئة",
 ]
 
+# ─── Few-Shot Examples ────────────────────────────────────────────────────────
+FEW_SHOT_EXAMPLES = """
+مثال 1 — وثيقة مؤسسية قوية (درجات متوقعة: 80-95)
+النص:
+تمتلك كلية الهندسة خطة استراتيجية خمسية (2022-2027) معتمدة من مجلس الكلية
+بتاريخ 15/3/2022، تتضمن رؤية ورسالة واضحتين وأهدافاً استراتيجية مرتبطة
+بمؤشرات أداء قابلة للقياس. يضم مجلس الكلية لجان متخصصة للجودة والبحث العلمي.
+أعضاء هيئة التدريس حاصلون على الدكتوراه ولديهم خطط سنوية للتطوير المهني.
+معدل توظيف الخريجين 85% خلال 6 أشهر. الميزانية تغطي 120% من الاحتياجات.
+
+الـ JSON المتوقع:
+{
+  "thinking": "وثيقة مؤسسية قوية تحتوي على خطة استراتيجية واضحة، لجان جودة، بيانات خريجين.",
+  "is_relevant": true,
+  "domain_scores": {
+    "التخطيط الاستراتيجي": 90,
+    "القيادة والحوكمة": 85,
+    "إدارة الجودة والتطوير": 70,
+    "أعضاء هيئة التدريس والهيئة المعاونة": 82,
+    "الجهاز الإداري": 60,
+    "الموارد المالية والمادية": 87,
+    "المعايير الأكاديمية والبرامج التعليمية": 80,
+    "التدريس والتعلم": 65,
+    "الطالب والخريجون": 88,
+    "البحث العلمي والأنشطة العلمية": 55,
+    "الدراسات العليا": 50,
+    "المشاركة المجتمعية وتنمية البيئة": 58
+  },
+  "overall_score": 72.5,
+  "strengths": "خطة استراتيجية واضحة مع مؤشرات قياس ومعدل توظيف خريجين مرتفع",
+  "weaknesses": "البحث العلمي والمشاركة المجتمعية يحتاجان توثيقاً أوضح"
+}
+
+مثال 2 — وثيقة مؤسسية ضعيفة (درجات متوقعة: 10-30)
+النص:
+المعهد يضم عدداً من الأقسام ويقدم برامج متنوعة. يوجد مجلس إدارة.
+المدرسون متخصصون في مجالاتهم. يتم قبول الطلاب وفق اللوائح العامة.
+
+الـ JSON المتوقع:
+{
+  "thinking": "وثيقة شديدة الإيجاز، لا تحتوي على أدلة أو تفاصيل لأي معيار.",
+  "is_relevant": true,
+  "domain_scores": {
+    "التخطيط الاستراتيجي": 15,
+    "القيادة والحوكمة": 20,
+    "إدارة الجودة والتطوير": 10,
+    "أعضاء هيئة التدريس والهيئة المعاونة": 18,
+    "الجهاز الإداري": 12,
+    "الموارد المالية والمادية": 10,
+    "المعايير الأكاديمية والبرامج التعليمية": 22,
+    "التدريس والتعلم": 15,
+    "الطالب والخريجون": 20,
+    "البحث العلمي والأنشطة العلمية": 10,
+    "الدراسات العليا": 50,
+    "المشاركة المجتمعية وتنمية البيئة": 10
+  },
+  "overall_score": 17.7,
+  "strengths": "الوثيقة تقر بوجود هيكل تنظيمي أساسي",
+  "weaknesses": "غياب شبه كامل للتفاصيل والأدلة في جميع المعايير"
+}
+"""
+
+# ─── System Prompt ─────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = f"""أنت خبير تقييم مؤسسي متخصص في معايير الاعتماد المؤسسي الرسمية
+للهيئة القومية لضمان جودة التعليم والاعتماد (NAQAAE) في مصر —
+دليل اعتماد كليات ومعاهد التعليم العالي (إصدار 2015 المعدل)،
+وهو يتضمن 12 معياراً رسمياً.
+
+══════════════════════════════════════════
+خطوات التفكير (Chain of Thought) — اتبعها بالترتيب:
+══════════════════════════════════════════
+الخطوة 1 — تحديد الصلة:
+  هل النص وثيقة مؤسسية / تعليمية / اعتماد جودة؟
+  أم نص لا علاقة له بالموضوع (محادثة، نص أدبي، كود، إلخ)؟
+
+الخطوة 2 — تحليل كل معيار من الـ 12:
+  استخرج الأدلة الموجودة في النص لكل معيار قبل إعطاء الدرجة.
+
+الخطوة 3 — التقييم وفق الـ Rubric:
+  • غير مذكور أو غير متعلق  → 0  - 30
+  • مذكور بشكل سطحي          → 30 - 60
+  • مفصّل مع أدلة             → 60 - 85
+  • شامل ومتكامل مع مؤشرات   → 85 - 100
+
+الخطوة 4 — حساب overall_score = متوسط الـ 12 درجة.
+
+الخطوة 5 — كتابة الـ JSON فقط.
+
+══════════════════════════════════════════
+قواعد خاصة (Negative Instructions):
+══════════════════════════════════════════
+- لا تخترع معلومات غير موجودة في النص.
+- لا تفترض وجود أدلة لم تُذكر صراحةً.
+- لو النص لا علاقة له بالموضوع المؤسسي → is_relevant=false وأعط 0-10 لكل معيار.
+- معيار "الدراسات العليا" قد لا ينطبق على مؤسسات بدون برامج عليا → أعطه 50.
+- لا تضع أي نص خارج الـ JSON في الإجابة النهائية.
+- حقل "thinking" مطلوب دائماً.
+
+══════════════════════════════════════════
+أمثلة توضيحية (Few-Shot Examples):
+══════════════════════════════════════════
+{FEW_SHOT_EXAMPLES}
+
+══════════════════════════════════════════
+صيغة الإجابة المطلوبة (Structured Output):
+══════════════════════════════════════════
+أعد JSON فقط بهذا الشكل بالضبط، بدون أي نص قبله أو بعده:
+{{
+  "thinking": "<شرح موجز لتفكيرك — 2-4 جمل>",
+  "is_relevant": <true أو false>,
+  "domain_scores": {{
+    "التخطيط الاستراتيجي":                   <0-100>,
+    "القيادة والحوكمة":                       <0-100>,
+    "إدارة الجودة والتطوير":                  <0-100>,
+    "أعضاء هيئة التدريس والهيئة المعاونة":   <0-100>,
+    "الجهاز الإداري":                         <0-100>,
+    "الموارد المالية والمادية":               <0-100>,
+    "المعايير الأكاديمية والبرامج التعليمية": <0-100>,
+    "التدريس والتعلم":                        <0-100>,
+    "الطالب والخريجون":                       <0-100>,
+    "البحث العلمي والأنشطة العلمية":          <0-100>,
+    "الدراسات العليا":                        <0-100>,
+    "المشاركة المجتمعية وتنمية البيئة":       <0-100>
+  }},
+  "overall_score": <متوسط الـ 12 درجة>,
+  "strengths":  "<أهم نقطتين إيجابيتين، أو فارغة لو النص غير متعلق>",
+  "weaknesses": "<أهم نقطتين سلبيتين، أو وصف كون النص غير مؤسسي>"
+}}"""
+
 
 def _headers() -> dict:
     return {
@@ -41,7 +177,6 @@ def _headers() -> dict:
 
 
 def _parse_retry_wait(resp) -> float:
-    """يحاول يستخرج مدة الانتظار المطلوبة من رسالة الـ rate limit"""
     retry_after = resp.headers.get("Retry-After")
     if retry_after:
         try:
@@ -63,10 +198,10 @@ def _call_groq(messages: list, model: str = DEFAULT_MODEL, max_retries: int = 3)
             resp = requests.post(
                 GROQ_API_URL,
                 json={
-                    "model": model,
-                    "messages": messages,
+                    "model":       model,
+                    "messages":    messages,
                     "temperature": 0.1,
-                    "max_tokens": 2048,
+                    "max_tokens":  2048,
                 },
                 headers=_headers(),
                 timeout=120,
@@ -74,7 +209,7 @@ def _call_groq(messages: list, model: str = DEFAULT_MODEL, max_retries: int = 3)
 
             if resp.status_code == 429:
                 wait = min(_parse_retry_wait(resp) + 0.5, 30)
-                print(f"[Groq/NAQAAE] Rate limited (attempt {attempt + 1}/{max_retries + 1}), waiting {wait}s")
+                print(f"[Groq/NAQAAE] Rate limited (attempt {attempt+1}/{max_retries+1}), waiting {wait}s")
                 if attempt < max_retries:
                     time.sleep(wait)
                     continue
@@ -85,6 +220,7 @@ def _call_groq(messages: list, model: str = DEFAULT_MODEL, max_retries: int = 3)
                 return None
 
             return resp.json()["choices"][0]["message"]["content"].strip()
+
         except Exception as e:
             print(f"[Groq/NAQAAE] Exception: {e}")
             return None
@@ -94,58 +230,25 @@ def _call_groq(messages: list, model: str = DEFAULT_MODEL, max_retries: int = 3)
 def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
     """
     نفس الـ interface القديم بتاع naqaae_client.py
-    بيرجع: {"status", "score", "recs", "error", "domain_scores"}
-    domain_scores دلوقتي بتغطي المعايير الـ 12 الرسمية لـ NAQAAE
+    بيرجع: {"status", "score", "recs", "error", "domain_scores", "thinking"}
     """
     if not text or not text.strip():
         return {"status": None, "score": None, "recs": None,
-                "error": "⚠️ النص فاضي", "domain_scores": {}}
+                "error": "⚠️ النص فاضي", "domain_scores": {}, "thinking": ""}
 
-    # اختصار النص لو كبير
     words = text.split()
     if len(words) > 1200:
         text = " ".join(words[:1200])
 
-    domains_str = "\n".join(f'  "{d}": <رقم من 0 لـ 100>' for d in DOMAINS)
-
-    system = """أنت خبير تقييم مؤسسي متخصص في معايير الاعتماد المؤسسي الرسمية
-للهيئة القومية لضمان جودة التعليم والاعتماد (NAQAAE) في مصر — دليل اعتماد
-كليات ومعاهد التعليم العالي (إصدار 2015 المعدل)، وهو يتضمن 12 معيار رسمي.
-
-مهمتك أولاً: تحديد هل النص المُقدم له علاقة من الأساس بوثائق مؤسسية / تعليمية /
-اعتماد جودة (مثل: خطط استراتيجية، تقارير، لوائح، مرفقات اعتماد، إلخ)، أم نص
-عشوائي لا علاقة له بالموضوع (مثل: محادثة عادية، نص أدبي، كود برمجي، إلخ).
-
-ثانياً: قيّم الوثيقة على المعايير الـ 12 وإعطاء درجة لكل معيار.
-
-قواعد التقييم:
-- قيّم فقط ما هو موجود فعلاً في النص
-- لو المعيار مش مذكور في النص → أعطه درجة منخفضة (10-30)
-- لو المعيار مذكور بشكل سطحي → 30-60
-- لو المعيار مفصّل مع أدلة → 60-85
-- لو المعيار شامل ومتكامل → 85-100
-- لو النص بالكامل لا علاقة له بالموضوع المؤسسي/التعليمي من الأساس،
-  ضع is_relevant=false وأعط كل المعايير درجة منخفضة جداً (0-10)
-- ملحوظة: معيار "الدراسات العليا" قد لا ينطبق على كل المؤسسات (كليات بدون
-  برامج دراسات عليا)؛ في هذه الحالة قيّمه بدرجة متوسطة (50) واذكر ذلك في recs
-  بدلاً من تصفيره بالكامل
-
-أعد JSON فقط بهذا الشكل بالضبط، بدون أي نص خارجه:
-{
-  "is_relevant": <true أو false>,
-  "domain_scores": {
-""" + domains_str + """
-  },
-  "overall_score": <متوسط المعايير الـ 12>,
-  "strengths": "<أهم نقطتين إيجابيتين في جملة واحدة، أو فارغة لو النص غير متعلق>",
-  "weaknesses": "<أهم نقطتين سلبيتين في جملة واحدة، أو وصف لكون النص غير متعلق بمعايير الاعتماد لو is_relevant=false>"
-}"""
-
-    user_content = f"قيّم الوثيقة التالية وفق المعايير الـ 12 الرسمية لـ NAQAAE:\n\n{text}"
+    user_content = (
+        "قيّم الوثيقة التالية وفق المعايير الـ 12 الرسمية لـ NAQAAE.\n"
+        "اتبع خطوات التفكير المذكورة في التعليمات، ثم أعد JSON فقط:\n\n"
+        f"{text}"
+    )
 
     raw = _call_groq(
         messages=[
-            {"role": "system", "content": system},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": user_content},
         ],
         model=model,
@@ -153,13 +256,11 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 
     if not raw:
         return {"status": "غير معروف", "score": 0.0, "recs": "",
-                "error": "⚠️ تعذر إكمال التحليل حاليًا، برجاء المحاولة مرة أخرى بعد قليل",
-                "domain_scores": {}}
+                "error": "⚠️ تعذر إكمال التحليل، برجاء المحاولة مرة أخرى بعد قليل",
+                "domain_scores": {}, "thinking": ""}
 
-    # Parse JSON
     try:
         clean = raw.strip()
-        # إزالة markdown لو موجود
         if "```" in clean:
             clean = clean.split("```")[1]
             if clean.startswith("json"):
@@ -167,13 +268,12 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
         data = json.loads(clean.strip())
     except Exception:
         return {"status": "غير معروف", "score": 0.0, "recs": raw,
-                "error": None, "domain_scores": {}}
+                "error": None, "domain_scores": {}, "thinking": ""}
 
-    # استخراج النتايج
     domain_scores = data.get("domain_scores", {})
     is_relevant   = data.get("is_relevant", True)
+    thinking      = data.get("thinking", "")
 
-    # حساب الـ overall score
     raw_score = data.get("overall_score")
     if raw_score:
         score = float(raw_score)
@@ -185,7 +285,6 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
 
     score = round(max(0.0, min(score, 100.0)), 1)
 
-    # تحديد الـ status
     if not is_relevant:
         status = "غير قابل للتقييم"
     elif score >= 70:
@@ -195,61 +294,54 @@ def analyze_with_naqaae(text: str, model: str = DEFAULT_MODEL) -> dict:
     else:
         status = "غير معتمد"
 
-    # التوصيات
     strengths  = data.get("strengths", "")
     weaknesses = data.get("weaknesses", "")
     if not is_relevant:
         recs = (weaknesses or
-                "المحتوى المُقدم لا يتعلق بمعايير الاعتماد المؤسسي، "
+                "المحتوى لا يتعلق بمعايير الاعتماد المؤسسي، "
                 "برجاء رفع وثيقة مؤسسية (خطة استراتيجية، تقرير، لائحة، أو مرفقات اعتماد).")
     else:
         recs = f"نقاط القوة: {strengths}\nنقاط الضعف: {weaknesses}" if strengths or weaknesses else ""
 
     return {
-        "status":       status,
-        "score":        score,
-        "recs":         recs,
-        "error":        None,
+        "status":        status,
+        "score":         score,
+        "recs":          recs,
+        "error":         None,
         "domain_scores": domain_scores,
-        "is_relevant":  is_relevant,
+        "is_relevant":   is_relevant,
+        "thinking":      thinking,
     }
 
 
 def check_space_status() -> bool:
-    """للتوافق مع الكود القديم"""
     return bool(GROQ_API_KEY)
 
 
 def extract_document_meta(text: str, model: str = DEFAULT_MODEL) -> dict:
-    """
-    يستخرج رقم/كود الوثيقة (لو موجود) وأحدث تاريخ مذكور فيها.
-    بيرجع: {"document_id": str|None, "document_date": str|None (YYYY-MM-DD), "document_year": int|None}
-    """
     empty = {"document_id": None, "document_date": None, "document_year": None}
 
     if not text or not text.strip():
         return empty
 
     words = text.split()
-    sample = " ".join(words[:600])  # أول 600 كلمة كفاية لمعرفة الميتاداتا
+    sample = " ".join(words[:600])
 
     system = """أنت مساعد متخصص في استخراج البيانات الوصفية من الوثائق المؤسسية العربية.
-مهمتك: استخراج رقم/كود الوثيقة (لو موجود) وأحدث تاريخ مذكور في النص (تاريخ إصدار،
-تاريخ اعتماد، تاريخ تقرير، أو أي تاريخ واضح يخص الوثيقة نفسها — وليس تواريخ عشوائية
-مذكورة كأمثلة داخل النص).
+مهمتك: استخراج رقم/كود الوثيقة (لو موجود) وأحدث تاريخ مذكور في النص.
 
 قواعد:
-- لو مفيش رقم/كود وثيقة واضح، اجعل document_id = null
-- لو مفيش تاريخ واضح، اجعل document_date = null و document_year = null
-- حوّل أي تاريخ هجري لاحظ أنه هجري ولا تحوله، فقط استخرج السنة الميلادية لو مذكورة صريح،
-  وإن لم تكن متأكداً من التحويل اجعل document_year = null
-- التاريخ المطلوب بصيغة ISO: YYYY-MM-DD (أو YYYY-MM أو YYYY لو الشهر/اليوم غير معروفين)
+- لو مفيش رقم/كود وثيقة واضح → document_id = null
+- لو مفيش تاريخ واضح → document_date = null و document_year = null
+- لا تحوّل التواريخ الهجرية — استخرج السنة الميلادية فقط لو مذكورة صراحة
+- التاريخ بصيغة ISO: YYYY-MM-DD أو YYYY-MM أو YYYY
+- لا تضع أي نص خارج الـ JSON
 
-أعد JSON فقط بهذا الشكل بالضبط، بدون أي نص خارجه:
+أعد JSON فقط:
 {
-  "document_id": "<رقم/كود الوثيقة أو null>",
-  "document_date": "<أحدث تاريخ بصيغة YYYY-MM-DD أو YYYY-MM أو YYYY، أو null>",
-  "document_year": <السنة كرقم فقط، أو null>
+  "document_id":   "<رقم/كود الوثيقة أو null>",
+  "document_date": "<تاريخ بصيغة ISO أو null>",
+  "document_year": <السنة كرقم أو null>
 }"""
 
     raw = _call_groq(
@@ -282,7 +374,6 @@ def extract_document_meta(text: str, model: str = DEFAULT_MODEL) -> dict:
     except (ValueError, TypeError):
         doc_year = None
 
-    # fallback: لو السنة مش متوفرة بس التاريخ متوفر، نستخرجها من أول 4 أرقام فيه
     if doc_year is None and doc_date:
         match = re.match(r"^(\d{4})", doc_date.strip())
         if match:
