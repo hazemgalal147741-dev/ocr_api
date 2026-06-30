@@ -2,6 +2,8 @@
 Arabic OCR API — FastAPI
 POST /ocr      ← ملف → نص
 POST /analyze  ← نص → تحليل NAQAAE + تقرير Groq
+POST /process  ← ملف → OCR + تحليل في خطوة واحدة
+POST /chat     ← شات بوت يتكلم مصري لمناقشة النتايج وأسئلة NAQAAE
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
@@ -19,8 +21,9 @@ from ollama_corrector import (
     synthesize_report,
 )
 from naqaae_evaluator import analyze_with_naqaae, extract_document_meta
+from naqaae_chatbot import chat_with_assistant, ChatRequest, ChatResponse
 
-app = FastAPI(title="Arabic OCR + NAQAAE API", version="2.0.0")
+app = FastAPI(title="Arabic OCR + NAQAAE API", version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,7 +59,7 @@ class AnalyzeResponse(BaseModel):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "endpoints": ["/ocr", "/analyze"]}
+    return {"status": "ok", "endpoints": ["/ocr", "/analyze", "/process", "/chat"]}
 
 
 # ─── Endpoint 1: OCR ─────────────────────────────────────────────────────────
@@ -349,3 +352,31 @@ async def process(
         domain_scores=n_domain_scores,
         final_report=final_report,
     )
+
+
+# ─── Endpoint 4: Chat (شات بوت مصري) ─────────────────────────────────────────
+
+@app.post("/chat", response_model=ChatResponse)
+def chat(body: ChatRequest):
+    """
+    شات بوت يتكلم باللهجة المصرية — بيساعد المستخدم يفهم نتيجة تقييمه
+    أو يجاوب أسئلة عامة عن معايير NAQAAE الـ 12.
+
+    body المتوقع:
+    {
+        "message": "ليه السكور بتاعي 50؟",
+        "history": [
+            {"role": "user", "content": "..."},
+            {"role": "assistant", "content": "..."}
+        ],
+        "evaluation_context": {
+            "overall_score": 72.5,
+            "status": "معتمد",
+            "domain_scores": {...},
+            "strengths": "...",
+            "weaknesses": "..."
+        }
+    }
+    history و evaluation_context اختياريين بالكامل (الشات بيشتغل من غيرهم برضو).
+    """
+    return chat_with_assistant(body)
